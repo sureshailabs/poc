@@ -4,3 +4,4 @@ python-dotenv==1.0.1
 google-generativeai==0.7.2 
 openai==1.43.0 
 clickhouse-connect==0.7.19
+requests
