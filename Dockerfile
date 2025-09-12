@@ -25,8 +25,6 @@ COPY main.py /app/
 # If you keep the DDL in the image, uncomment next line:
 COPY orbit_japa.sql /app/orbit_japa.sql
 
-# (Optional) Copy an example env; DO NOT bake real secrets in the image
-COPY .env /app/.env
 
 EXPOSE 8501
 CMD ["streamlit", "run", "main.py", "--server.address=0.0.0.0", "--server.port=8501"]
