@@ -281,8 +281,10 @@ def complete_with_openai(api_key: str, model: str, prompt: str, site_url: str = 
             st.error(f"❌ API error: {error_msg}")
         return ""
 
-def complete_with_openrouter(api_key: str, model: str, prompt: str, site_url: str = None, site_name: str = None) -> str:
-    """Dedicated OpenRouter completion function"""
+import time
+
+def complete_with_openrouter(api_key: str, model: str, prompt: str, site_url: str = None, site_name: str = None, max_retries: int = 3) -> str:
+    """OpenRouter completion function with automatic retry on rate-limit (429)"""
     if OpenAI is None:
         return ""
     if not api_key:
@@ -315,9 +317,25 @@ def complete_with_openrouter(api_key: str, model: str, prompt: str, site_url: st
         
         if extra_headers:
             completion_kwargs["extra_headers"] = extra_headers
-            
-        chat = client.chat.completions.create(**completion_kwargs)
-        return (chat.choices[0].message.content or "").strip()
+        
+        attempt = 0
+        while attempt < max_retries:
+            try:
+                chat = client.chat.completions.create(**completion_kwargs)
+                return (chat.choices[0].message.content or "").strip()
+            except Exception as e:
+                error_msg = str(e)
+                if "429" in error_msg or "rate-limited" in error_msg.lower():
+                    attempt += 1
+                    wait_time = 2 ** attempt  # exponential backoff: 2,4,8 seconds
+                    st.warning(f"⚠️ OpenRouter rate-limited. Retrying in {wait_time}s… (Attempt {attempt}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Non-rate-limit error
+                    raise
+        st.error(f"❌ OpenRouter API rate limit reached after {max_retries} attempts. Please try again later.")
+        return ""
     except Exception as e:
         error_msg = str(e)
         if "invalid_api_key" in error_msg.lower() or "authentication" in error_msg.lower():
@@ -327,6 +345,7 @@ def complete_with_openrouter(api_key: str, model: str, prompt: str, site_url: st
         else:
             st.error(f"❌ OpenRouter API error: {error_msg}")
         return ""
+
 
 def llm_generate_sql(provider: str, api_key: str, model: str, prompt: str) -> str:
     site_url = os.getenv("SITE_URL")
