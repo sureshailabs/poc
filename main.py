@@ -192,62 +192,189 @@ If the question is not about data analysis, DO NOT write SQL.
 
 
 # =========================
-# LLM helpers (SQL + chat)
+# LLM helpers (SQL + chat) - UPDATED WITH OPENROUTER
 # =========================
 def complete_with_gemini(api_key: str, model: str, prompt: str) -> str:
-    if genai is None or not api_key:
+    if genai is None:
         return ""
-    genai.configure(api_key=api_key)
-    m = genai.GenerativeModel(model or "gemini-1.5-pro")
-    r = m.generate_content(prompt)
-    return (getattr(r, "text", "") or "").strip()
-
-def complete_with_openai(api_key: str, model: str, prompt: str) -> str:
-    if OpenAI is None or not api_key:
+    if not api_key:
+        st.error("❌ Gemini API key not found. Please check your GEMINI_API_KEY environment variable.")
         return ""
-    client = OpenAI(api_key=api_key)
+    
     try:
-        r = client.responses.create(model=model or "gpt-4o-mini", input=prompt)
-        return (getattr(r, "output_text", "") or "").strip()
-    except Exception:
-        try:
-            chat = client.chat.completions.create(
-                model=model or "gpt-4o-mini",
-                messages=[{"role":"system","content":"You output only SQL."},
-                          {"role":"user","content":prompt}],
-                temperature=0.0,
-            )
-            return (chat.choices[0].message.content or "").strip()
-        except Exception:
-            return ""
+        genai.configure(api_key=api_key)
+        m = genai.GenerativeModel(model or "gemini-1.5-pro")
+        r = m.generate_content(prompt)
+        return (getattr(r, "text", "") or "").strip()
+    except Exception as e:
+        error_msg = str(e)
+        if "API_KEY_INVALID" in error_msg or "API key" in error_msg:
+            st.error("❌ Invalid Gemini API key. Please check your GEMINI_API_KEY environment variable.")
+        elif "quota" in error_msg.lower():
+            st.error("❌ Gemini API quota exceeded. Please check your usage limits.")
+        else:
+            st.error(f"❌ Gemini API error: {error_msg}")
+        return ""
+
+def complete_with_openai(api_key: str, model: str, prompt: str, site_url: str = None, site_name: str = None) -> str:
+    if OpenAI is None:
+        return ""
+    if not api_key:
+        st.error("❌ OpenAI API key not found. Please check your OPENAI_API_KEY environment variable.")
+        return ""
+    
+    # Prepare headers and body for OpenRouter
+    extra_headers = {}
+    if site_url:
+        extra_headers["HTTP-Referer"] = site_url
+    if site_name:
+        extra_headers["X-Title"] = site_name
+        
+    extra_body = {}
+    
+    # Determine base URL - use OpenRouter if model contains /
+    if "/" in model:
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+    else:
+        client = OpenAI(api_key=api_key)
+    
+    try:
+        # Try using responses API first (for OpenAI native)
+        if "/" not in model:
+            try:
+                r = client.responses.create(model=model or "gpt-4o-mini", input=prompt)
+                return (getattr(r, "output_text", "") or "").strip()
+            except Exception:
+                pass  # Fall back to chat completions
+    
+        # Fallback to chat completions API (works for both OpenAI and OpenRouter)
+        messages = [
+            {"role": "system", "content": "You output only SQL when asked for SQL queries, otherwise respond naturally."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        completion_kwargs = {
+            "model": model or "gpt-4o-mini",
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": 1000,
+        }
+        
+        # Add OpenRouter specific headers if provided
+        if extra_headers:
+            completion_kwargs["extra_headers"] = extra_headers
+        if extra_body:
+            completion_kwargs["extra_body"] = extra_body
+            
+        chat = client.chat.completions.create(**completion_kwargs)
+        return (chat.choices[0].message.content or "").strip()
+    except Exception as e:
+        error_msg = str(e)
+        if "invalid_api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+            st.error("❌ Invalid API key. Please check your API key configuration.")
+        elif "quota" in error_msg.lower():
+            st.error("❌ API quota exceeded. Please check your usage limits.")
+        else:
+            st.error(f"❌ API error: {error_msg}")
+        return ""
+
+def complete_with_openrouter(api_key: str, model: str, prompt: str, site_url: str = None, site_name: str = None) -> str:
+    """Dedicated OpenRouter completion function"""
+    if OpenAI is None:
+        return ""
+    if not api_key:
+        st.error("❌ OpenRouter API key not found. Please check your OPENROUTER_API_KEY environment variable.")
+        return ""
+    
+    try:
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+        
+        extra_headers = {}
+        if site_url:
+            extra_headers["HTTP-Referer"] = site_url
+        if site_name:
+            extra_headers["X-Title"] = site_name
+            
+        messages = [
+            {"role": "system", "content": "You output only SQL when asked for SQL queries, otherwise respond naturally."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        completion_kwargs = {
+            "model": model or "google/gemini-2.0-flash-exp:free",
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": 1000,
+        }
+        
+        if extra_headers:
+            completion_kwargs["extra_headers"] = extra_headers
+            
+        chat = client.chat.completions.create(**completion_kwargs)
+        return (chat.choices[0].message.content or "").strip()
+    except Exception as e:
+        error_msg = str(e)
+        if "invalid_api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+            st.error("❌ Invalid OpenRouter API key. Please check your OPENROUTER_API_KEY environment variable.")
+        elif "quota" in error_msg.lower():
+            st.error("❌ OpenRouter quota exceeded. Please check your usage limits.")
+        else:
+            st.error(f"❌ OpenRouter API error: {error_msg}")
+        return ""
 
 def llm_generate_sql(provider: str, api_key: str, model: str, prompt: str) -> str:
+    site_url = os.getenv("SITE_URL")
+    site_name = os.getenv("SITE_NAME")
+    
     if provider == "Gemini":
         return complete_with_gemini(api_key, model, prompt)
-    if provider == "OpenAI":
-        return complete_with_openai(api_key, model, prompt)
+    elif provider == "OpenAI":
+        return complete_with_openai(api_key, model, prompt, site_url, site_name)
+    elif provider == "OpenRouter":
+        return complete_with_openrouter(api_key, model, prompt, site_url, site_name)
+    
+    st.error(f"❌ Unknown provider: {provider}")
     return "SELECT 1 WHERE 0;"
 
 def llm_chat(provider: str, api_key: str, model: str, user_text: str) -> str:
     # A simple general-purpose chat response (no SQL constraint)
+    site_url = os.getenv("SITE_URL")
+    site_name = os.getenv("SITE_NAME")
+    
     system = "You are a friendly, concise assistant. Answer helpfully."
+    
     if provider == "Gemini" and api_key and genai is not None:
-        genai.configure(api_key=api_key)
-        m = genai.GenerativeModel(model or "gemini-1.5-pro")
-        r = m.generate_content(f"{system}\n\nUser: {user_text}\nAssistant:")
-        return (getattr(r, "text", "") or "").strip()
-    if provider == "OpenAI" and api_key and OpenAI is not None:
-        client = OpenAI(api_key=api_key)
         try:
+            genai.configure(api_key=api_key)
+            m = genai.GenerativeModel(model or "gemini-1.5-pro")
+            r = m.generate_content(f"{system}\n\nUser: {user_text}\nAssistant:")
+            return (getattr(r, "text", "") or "").strip()
+        except Exception as e:
+            return f"Sorry, I couldn't process your request: {str(e)}"
+    
+    elif provider == "OpenAI" and api_key and OpenAI is not None:
+        try:
+            client = OpenAI(api_key=api_key)
             chat = client.chat.completions.create(
                 model=model or "gpt-4o-mini",
                 messages=[{"role":"system","content":system},
-                          {"role":"user","content":user_text}],
+                         {"role":"user","content":user_text}],
                 temperature=0.5,
             )
             return (chat.choices[0].message.content or "").strip()
         except Exception:
             return "Sorry, I couldn't reach the LLM right now."
+    
+    elif provider == "OpenRouter" and api_key and OpenAI is not None:
+        response = complete_with_openrouter(api_key, model, f"{system}\n\nUser: {user_text}", site_url, site_name)
+        return response if response else "Sorry, I couldn't process your request."
+    
     # Fallback
     return "Hi! 👋 How can I help?"
 
@@ -292,12 +419,26 @@ def run_clickhouse_select(sql: str, host: str, port: int, username: str, passwor
 
 
 # =========================
-# Env config
+# Env config - UPDATED WITH OPENROUTER
 # =========================
-PROVIDER = os.getenv("LLM_PROVIDER", "Gemini")  # Gemini | OpenAI | Mock
+PROVIDER = os.getenv("LLM_PROVIDER", "Gemini")  # Gemini | OpenAI | OpenRouter | Mock
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini" if PROVIDER == "OpenAI" else "gemini-1.5-pro")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "")
+
+# Set default model based on provider
+if not LLM_MODEL:
+    if PROVIDER == "OpenAI":
+        LLM_MODEL = "gpt-4o-mini"
+    elif PROVIDER == "OpenRouter":
+        LLM_MODEL = "google/gemini-2.0-flash-exp:free"
+    else:  # Gemini
+        LLM_MODEL = "gemini-1.5-pro"
+
+# OpenRouter specific settings
+SITE_URL = os.getenv("SITE_URL", "")
+SITE_NAME = os.getenv("SITE_NAME", "")
 
 EXECUTE_SQL = os.getenv("EXECUTE_SQL", "false").lower() in {"1","true","yes"}
 SUMMARIZE = os.getenv("SUMMARIZE", "true").lower() in {"1","true","yes"}
@@ -309,12 +450,36 @@ CH_PASS = os.getenv("CLICKHOUSE_PASSWORD", "")
 CH_DB = os.getenv("CLICKHOUSE_DATABASE", "")
 CH_SECURE = os.getenv("CLICKHOUSE_SECURE", "true").lower() in {"1","true","yes"}
 
+# Get API key based on provider
+def get_api_key(provider: str) -> str:
+    if provider == "Gemini":
+        return GEMINI_API_KEY
+    elif provider == "OpenAI":
+        return OPENAI_API_KEY
+    elif provider == "OpenRouter":
+        return OPENROUTER_API_KEY
+    return ""
+
 
 # =========================
 # Minimal Chatbot UI
 # =========================
 st.set_page_config(page_title="Japa Text‑to‑SQL Chat", page_icon="🧘", layout="centered")
 st.title("🧘Text‑to‑SQL Analytical Chatbot")
+
+# Provider info display
+st.sidebar.markdown("### Configuration")
+st.sidebar.write(f"**Provider:** {PROVIDER}")
+st.sidebar.write(f"**Model:** {LLM_MODEL}")
+if PROVIDER == "OpenRouter" and SITE_NAME:
+    st.sidebar.write(f"**Site:** {SITE_NAME}")
+
+# API key status
+api_key = get_api_key(PROVIDER)
+if not api_key:
+    st.sidebar.error(f"❌ No API key found for {PROVIDER}")
+else:
+    st.sidebar.success(f"✅ API key configured for {PROVIDER}")
 
 # Prepare DDL schema_card (no UI noise)
 ddl_text = ""
@@ -342,46 +507,53 @@ if user_msg:
     with st.chat_message("user"):
         st.markdown(user_msg)
 
-    # Try to produce SQL for data-related queries
-    api_key = GEMINI_API_KEY if PROVIDER == "Gemini" else OPENAI_API_KEY
-    sql_prompt = build_sql_prompt(schema_card=schema_card, question=user_msg)
-    raw = llm_generate_sql(provider=PROVIDER, api_key=api_key or "", model=LLM_MODEL or "", prompt=sql_prompt)
-    sql = strip_explanations(raw).strip()
-
-    # One correction pass
-    hint = validate_sql_against_question(user_msg, sql)
-    if hint:
-        sql_prompt2 = sql_prompt + "\n\n# CORRECTION: " + hint + "\nSQL:"
-        raw2 = llm_generate_sql(provider=PROVIDER, api_key=api_key or "", model=LLM_MODEL or "", prompt=sql_prompt2)
-        sql2 = strip_explanations(raw2).strip()
-        if is_select_only(sql2):
-            sql = sql2
-
-    # Decide: SQL answer or chit-chat
-    sql_is_valid = is_select_only(sql) and ("orbit_japa." in sql or " from " in sql.lower())
-    if sql_is_valid:
-        # Build assistant message with SQL + optional execution + summary
-        blocks = []
-        blocks.append("Here you go:")
-        exec_df = None
-        if EXECUTE_SQL and CH_HOST and CH_USER:
-            try:
-                exec_df, cols = run_clickhouse_select(sql, CH_HOST, CH_PORT, CH_USER, CH_PASS, CH_DB, CH_SECURE)
-            except Exception as e:
-                blocks.append(f"_Execution error:_ `{e}`")
-
-        # render
+    # Get API key for current provider
+    api_key = get_api_key(PROVIDER)
+    
+    if not api_key:
+        error_msg = f"Please configure the {PROVIDER}_API_KEY environment variable."
         with st.chat_message("assistant"):
-            st.markdown("\n\n".join(blocks))
-            st.code(sql, language="sql")
-            if exec_df is not None:
-                st.dataframe(exec_df, use_container_width=True)
-                if SUMMARIZE:
-                    # summarizer
-                    # Reuse provider+key; concise summary
-                    preview_rows = min(30, len(exec_df))
-                    preview = exec_df.head(preview_rows).to_csv(index=False)
-                    summ_prompt = f"""
+            st.error(error_msg)
+        st.session_state["chat"].append({"role": "assistant", "content": error_msg})
+    else:
+        # Try to produce SQL for data-related queries
+        sql_prompt = build_sql_prompt(schema_card=schema_card, question=user_msg)
+        raw = llm_generate_sql(provider=PROVIDER, api_key=api_key, model=LLM_MODEL, prompt=sql_prompt)
+        sql = strip_explanations(raw).strip()
+
+        # One correction pass
+        hint = validate_sql_against_question(user_msg, sql)
+        if hint:
+            sql_prompt2 = sql_prompt + "\n\n# CORRECTION: " + hint + "\nSQL:"
+            raw2 = llm_generate_sql(provider=PROVIDER, api_key=api_key, model=LLM_MODEL, prompt=sql_prompt2)
+            sql2 = strip_explanations(raw2).strip()
+            if is_select_only(sql2):
+                sql = sql2
+
+        # Decide: SQL answer or chit-chat
+        sql_is_valid = is_select_only(sql) and ("orbit_japa." in sql or " from " in sql.lower())
+        if sql_is_valid and sql:
+            # Build assistant message with SQL + optional execution + summary
+            blocks = []
+            blocks.append("Here you go:")
+            exec_df = None
+            if EXECUTE_SQL and CH_HOST and CH_USER:
+                try:
+                    exec_df, cols = run_clickhouse_select(sql, CH_HOST, CH_PORT, CH_USER, CH_PASS, CH_DB, CH_SECURE)
+                except Exception as e:
+                    blocks.append(f"_Execution error:_ `{e}`")
+
+            # render
+            with st.chat_message("assistant"):
+                st.markdown("\n\n".join(blocks))
+                st.code(sql, language="sql")
+                if exec_df is not None:
+                    st.dataframe(exec_df, use_container_width=True)
+                    if SUMMARIZE:
+                        # summarizer
+                        preview_rows = min(30, len(exec_df))
+                        preview = exec_df.head(preview_rows).to_csv(index=False)
+                        summ_prompt = f"""
 You are a SQL result summarizer. Your job is to describe the result table truthfully, concisely, and without guessing.
 
 Rules:
@@ -408,20 +580,21 @@ CSV:
 
 ANSWER:
 """.strip()
-                    summary = ""
-                    if PROVIDER == "Gemini":
-                        summary = complete_with_gemini(api_key, LLM_MODEL, summ_prompt)
-                    elif PROVIDER == "OpenAI":
-                        summary = complete_with_openai(api_key, LLM_MODEL, summ_prompt)
-                    if not summary:
-                        summary = f"Returned {len(exec_df)} rows × {len(exec_df.columns)} cols."
-                    st.markdown(summary)
+                        summary = ""
+                        if PROVIDER == "Gemini":
+                            summary = complete_with_gemini(api_key, LLM_MODEL, summ_prompt)
+                        elif PROVIDER == "OpenAI":
+                            summary = complete_with_openai(api_key, LLM_MODEL, summ_prompt)
+                        elif PROVIDER == "OpenRouter":
+                            summary = complete_with_openrouter(api_key, LLM_MODEL, summ_prompt, SITE_URL, SITE_NAME)
+                        if not summary:
+                            summary = f"Returned {len(exec_df)} rows × {len(exec_df.columns)} cols."
+                        st.markdown(summary)
 
-        st.session_state["chat"].append({"role": "assistant", "content": "\n\n".join(blocks), "is_sql": True, "sql": sql})
-    else:
-        # Casual chat
-        reply = llm_chat(PROVIDER, api_key, LLM_MODEL, user_msg)
-        with st.chat_message("assistant"):
-            st.markdown(reply)
-        st.session_state["chat"].append({"role": "assistant", "content": reply})
-
+            st.session_state["chat"].append({"role": "assistant", "content": "\n\n".join(blocks), "is_sql": True, "sql": sql})
+        else:
+            # Casual chat
+            reply = llm_chat(PROVIDER, api_key, LLM_MODEL, user_msg)
+            with st.chat_message("assistant"):
+                st.markdown(reply)
+            st.session_state["chat"].append({"role": "assistant", "content": reply})
